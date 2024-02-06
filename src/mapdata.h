@@ -674,6 +674,8 @@ struct furn_t : map_data_common_t {
     const itype *crafting_pseudo_item_type() const;
     // May return NULL
     const itype *crafting_ammo_item_type() const;
+    // May return empty set, but all pointers are not null
+    std::set<const itype *> crafting_ammo_item_type_set() const;
 
     furn_t();
 
