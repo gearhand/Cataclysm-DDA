@@ -420,3 +420,7 @@ const itype_id &itype::tool_slot_first_ammo() const
     }
     return itype_id::NULL_ID();
 }
+
+bool operator<(const itype &lhs, const itype &rhs) {
+    return (lhs.get_id() < rhs.get_id());
+}

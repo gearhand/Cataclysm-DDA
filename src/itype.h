@@ -1531,6 +1531,8 @@ struct itype {
         bool is_basic_component() const;
 };
 
+bool operator<(const itype &lhs, const itype &rhs);
+
 void load_charge_removal_blacklist( const JsonObject &jo, std::string_view src );
 void load_temperature_removal_blacklist( const JsonObject &jo, std::string_view src );
 

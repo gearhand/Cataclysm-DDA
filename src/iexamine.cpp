@@ -4336,30 +4336,35 @@ const itype *furn_t::crafting_ammo_item_type() const
     return nullptr;
 }
 
-std::set<const itype *> furn_t::crafting_ammo_item_type_set() const
+std::set<std::reference_wrapper<const itype>> furn_t::crafting_ammo_item_type_set() const
 {
     const itype *pseudo = crafting_pseudo_item_type();
-    std::set<const itype *> result;
+    std::set<std::reference_wrapper<const itype>> result;
     if( pseudo && pseudo->tool ) {
         for (auto &id : pseudo->tool->ammo_id) {
             const itype * ammo_item = item::find_type( ammotype( id )->default_ammotype() );
             if (ammo_item) {
-                result.insert(ammo_item);
+                //result.insert(non_null_ptr(ammo_item));
+                result.emplace(std::cref(*ammo_item));
             }
         }
     }
     return result;
 }
 
-/**
-* Finds the number of charges of the first item that matches type.
-*
-* @param type       Search target.
-* @param items      Stack of items. Search stops at first match.
-*
-* @return           Number of charges.
-* */
-static int count_charges_in_list( const itype *type, const map_stack &items )
+int iexamine::count_ammo_at_point(const furn_t &f, const itype &ammo, const tripoint &p, map &m) {
+    // NOTE: This only works if the pseudo item has a MAGAZINE pocket, not a MAGAZINE_WELL!
+    const bool using_ammotype = f.has_flag( ter_furn_flag::TFLAG_AMMOTYPE_RELOAD );
+    itype_id ammo_id = ammo.get_id();
+    // Some furniture can consume more than one item type.
+    if( using_ammotype ) {
+        return iexamine::count_charges_in_list( &ammo.ammo->type, m.i_at( p ), ammo_id );
+    } else {
+        return iexamine::count_charges_in_list( &ammo, m.i_at( p ) );
+    }
+}
+
+int iexamine::count_charges_in_list( const itype *type, const map_stack &items )
 {
     for( const item &candidate : items ) {
         if( candidate.type == type ) {
@@ -4369,16 +4374,7 @@ static int count_charges_in_list( const itype *type, const map_stack &items )
     return 0;
 }
 
-/**
-* Finds the number of charges of the first item that matches ammotype.
-*
-* @param ammotype   Search target.
-* @param items      Stack of items. Search stops at first match.
-* @param [out] item_type Matching type.
-*
-* @return           Number of charges.
-* */
-static int count_charges_in_list( const ammotype *ammotype, const map_stack &items,
+int iexamine::count_charges_in_list( const ammotype *ammotype, const map_stack &items,
                                   itype_id &item_type )
 {
     for( const item &candidate : items ) {
@@ -4416,7 +4412,7 @@ static void unload_furniture( Character &you, const tripoint &examp, const itype
     }
 }
 
-static void load_furniture( Character &you, const tripoint &examp, const std::map<const itype *, int> &maximums, item &pseudo) {
+static void load_furniture( Character &you, const tripoint &examp, const std::map<const itype *, int> &maximums, item &&pseudo) {
     map &here = get_map();
     const furn_t &f = here.furn( examp ).obj();
     // maybe at some point we need a pseudo item_location or something
@@ -4464,7 +4460,7 @@ static void load_furniture( Character &you, const tripoint &examp, const std::ma
         opt.ammo.remove_item();
     }
 
-    const int amount_in_furn_after_placing = count_charges_in_list( opt_type,
+    const int amount_in_furn_after_placing = iexamine::count_charges_in_list( opt_type,
             here.i_at( examp ) );
     //~ %1$s - furniture, %2$d - number, %3$s items.
     add_msg( _( "The %1$s contains %2$d %3$s." ), f.name(), amount_in_furn_after_placing,
@@ -4480,50 +4476,47 @@ static void reload_furniture( Character &you, const tripoint &examp, bool allow_
     map &here = get_map();
     const furn_t &f = here.furn( examp ).obj(); // got furniture ref
     const itype *pseudo_type = f.crafting_pseudo_item_type(); // pseudo type overrides some properties of furniture
-    std::set<const itype *> ammo_variants = f.crafting_ammo_item_type_set();
+    auto ammo_variants = f.crafting_ammo_item_type_set();
     if( pseudo_type == nullptr || ammo_variants.empty() ) {
         add_msg( m_info, _( "This %s can not be reloaded!" ), f.name() );
         return;
     }
 
-    std::map<const itype *, int> amounts;
-    for (auto *ammo : ammo_variants) {
-        auto ammo_itypeID = ammo->get_id();
-        int quantity = f.has_flag( ter_furn_flag::TFLAG_AMMOTYPE_RELOAD ) ?
-            count_charges_in_list( &ammo->ammo->type, here.i_at( examp ), ammo_itypeID ) :
-            count_charges_in_list( ammo, here.i_at( examp ) );
-        if (quantity > 0) {
-            amounts.emplace(ammo, quantity);
+    std::pair<const itype *, int> amount = { nullptr, 0 };
+    for (const itype &ammo : ammo_variants) {
+        int current = iexamine::count_ammo_at_point(f, ammo, examp, here);
+        if (amount.second > 0 && current > 0) {
+            debugmsg("More than one type of fuel inside furniture");
+            return;
+        } else if (current > 0) {
+            amount = { &ammo, current };
         }
     }
-    int fuel_types_inside = amounts.size();
-    if (fuel_types_inside > 1) {
-        debugmsg("More than one type of fuel inside furniture");
-        return;
-    } else if (fuel_types_inside == 1) {
-        auto [ammo, amount_in_furn] = *amounts.begin();
-        if( allow_unload && amount_in_furn > 0 ) {
+    if (amount.first) {
+        auto [ammo, amount_in_furn] = amount;
+        if( allow_unload ) {
             if( you.query_yn( _( "The %1$s contains %2$d %3$s.  Unload?" ), f.name(), amount_in_furn,
                               ammo->get_id()->nname( amount_in_furn ) ) ) {
                 unload_furniture(you, examp, ammo->get_id());
                 return;
             }
         }
-    }
 
-
-    item pseudo ( pseudo_type );
-    std::map<const itype *, int> maximums;
-    for (auto *ammo : ammo_variants) {
-        const int max_reload_amount = pseudo.ammo_capacity( ammo->ammo->type ) - amounts[ammo]; // 0 will be inserted by default on missing keys
-        if( max_reload_amount <= 0 ) {
-            debugmsg("Max reload amount for %1$s is below zero", ammo->nname(1));
-            return;
+        item pseudo ( pseudo_type );
+        item furn_ammo( amount.first->get_id(), calendar::turn, amount.second );
+        pseudo.put_in( furn_ammo, pocket_type::MAGAZINE );
+        std::map<const itype *, int> capacity = { { amount.first, pseudo.ammo_capacity( amount.first->ammo->type )} };
+        load_furniture(you, examp, capacity, std::move(pseudo));
+    } else {
+        item pseudo ( pseudo_type );
+        std::map<const itype *, int> maximums;
+        for (const itype &ammo : ammo_variants) {
+            const int max_reload_amount = pseudo.ammo_capacity( ammo.ammo->type ); // 0 will be inserted by default on missing keys
+            maximums.emplace(&ammo, max_reload_amount);
         }
-        maximums.emplace(ammo, max_reload_amount);
-    }
 
-    load_furniture(you, examp, maximums, pseudo);
+        load_furniture(you, examp, maximums, std::move(pseudo));
+    }
 }
 
 void iexamine::reload_furniture( Character &you, const tripoint &examp )
@@ -5930,10 +5923,10 @@ static void smoker_activate( Character &you, const tripoint &examp )
 
     int char_charges = get_charcoal_charges( food_volume );
 
-    if( count_charges_in_list( charcoal->type, here.i_at( examp ) ) < char_charges ) {
+    if( iexamine::count_charges_in_list( charcoal->type, here.i_at( examp ) ) < char_charges ) {
         add_msg( _( "There is not enough charcoal in the rack to smoke this much food." ) );
         add_msg( _( "You need at least %1$s pieces of charcoal, and the smoking rack has %2$s inside." ),
-                 char_charges, count_charges_in_list( charcoal->type, here.i_at( examp ) ) );
+                 char_charges, iexamine::count_charges_in_list( charcoal->type, here.i_at( examp ) ) );
         return;
     }
 

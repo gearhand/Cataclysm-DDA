@@ -13,6 +13,8 @@
 #include "ret_val.h"
 #include "type_id.h"
 
+class map_stack;
+class map;
 class item;
 class JsonObject;
 class Character;
@@ -124,6 +126,27 @@ void fvat_empty( Character &you, const tripoint &examp );
 void fvat_full( Character &you, const tripoint &examp );
 void keg( Character &you, const tripoint &examp );
 void reload_furniture( Character &you, const tripoint &examp );
+int count_ammo_at_point(const furn_t &f, const itype &ammo, const tripoint &p, map &m);
+/**
+* Finds the number of charges of the first item that matches type.
+*
+* @param type       Search target.
+* @param items      Stack of items. Search stops at first match.
+*
+* @return           Number of charges.
+* */
+int count_charges_in_list( const itype *type, const map_stack &items );
+
+/**
+* Finds the number of charges of the first item that matches ammotype.
+*
+* @param ammotype   Search target.
+* @param items      Stack of items. Search stops at first match.
+* @param [out] item_type Matching type.
+*
+* @return           Number of charges.
+* */
+int count_charges_in_list( const ammotype *ammotype, const map_stack &items, itype_id &item_type );
 void curtains( Character &you, const tripoint &examp );
 void sign( Character &you, const tripoint &examp );
 void pay_gas( Character &you, const tripoint &examp );

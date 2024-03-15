@@ -449,37 +449,6 @@ void inventory::restack( Character &p )
 #endif
 }
 
-static int count_charges_in_list( const itype *type, const map_stack &items )
-{
-    for( const item &candidate : items ) {
-        if( candidate.type == type ) {
-            return candidate.charges;
-        }
-    }
-    return 0;
-}
-
-/**
-* Finds the number of charges of the first item that matches ammotype.
-*
-* @param ammotype   Search target.
-* @param items      Stack of items. Search stops at first match.
-* @param [out] item_type Matching type.
-*
-* @return           Number of charges.
-* */
-static int count_charges_in_list( const ammotype *ammotype, const map_stack &items,
-                                  itype_id &item_type )
-{
-    for( const item &candidate : items ) {
-        if( candidate.is_ammo() && candidate.type->ammo->type == *ammotype ) {
-            item_type = candidate.typeId();
-            return candidate.charges;
-        }
-    }
-    return 0;
-}
-
 void inventory::form_from_map( const tripoint &origin, int range, const Character *pl,
                                bool assign_invlet,
                                bool clear_path )
@@ -517,6 +486,7 @@ void inventory::form_from_map( map &m, const tripoint &origin, int range, const 
     form_from_map( m, reachable_pts, pl, assign_invlet );
 }
 
+
 void inventory::form_from_map( map &m, std::vector<tripoint> pts, const Character *pl,
                                bool assign_invlet )
 {
@@ -534,21 +504,36 @@ void inventory::form_from_map( map &m, std::vector<tripoint> pts, const Characte
             provide_pseudo_item( itype_brick_oven_pseudo );
         }
         const furn_t &f = m.furn( p ).obj();
-        if( item *furn_item = provide_pseudo_item( f.crafting_pseudo_item ) ) {
-            const itype *ammo = f.crafting_ammo_item_type();
-            if( furn_item->has_pocket_type( pocket_type::MAGAZINE ) ) {
+        if ( f.crafting_pseudo_item.is_valid() ) {
+            const itype *pseudo_type = item::find_type( f.crafting_pseudo_item ); // Never null
+            const auto &pockets = pseudo_type->pockets;
+            bool is_magazine = std::find_if(pockets.begin(), pockets.end(), [](const auto &data) { return data.type == pocket_type::MAGAZINE; }) != pockets.end();
+            auto ammo_variants = f.crafting_ammo_item_type_set();
+            if( is_magazine ) {
                 // NOTE: This only works if the pseudo item has a MAGAZINE pocket, not a MAGAZINE_WELL!
-                const bool using_ammotype = f.has_flag( ter_furn_flag::TFLAG_AMMOTYPE_RELOAD );
-                int amount = 0;
-                itype_id ammo_id = ammo->get_id();
-                // Some furniture can consume more than one item type.
-                if( using_ammotype ) {
-                    amount = count_charges_in_list( &ammo->ammo->type, m.i_at( p ), ammo_id );
-                } else {
-                    amount = count_charges_in_list( ammo, m.i_at( p ) );
+                std::pair<const itype *, int> amount = { nullptr, 0 };
+                for (const itype& ammo : ammo_variants) {
+                    int current = iexamine::count_ammo_at_point(f, ammo, p, m);
+                    if (amount.second > 0 && current > 0) {
+                        debugmsg("More than one type of fuel inside furniture");
+                        amount.first = nullptr;
+                        break;
+                    } else if (current > 0) {
+                        amount = { &ammo, current };
+                    }
                 }
-                item furn_ammo( ammo_id, calendar::turn, amount );
-                furn_item->put_in( furn_ammo, pocket_type::MAGAZINE );
+                if( amount.first ) {
+                    if(item *furn_item = provide_pseudo_item( f.crafting_pseudo_item )) {
+                        int current = furn_item->loaded_ammo().charges;
+                        add_msg( _( "DEBUG: fake item contains %d charges, inspected tile contains %d of %s" ), current, amount.second, amount.first->nname(amount.second) );
+                        if( amount.second > current ) {
+                            furn_item->ammo_unset(); // Forget everything
+                            item furn_ammo( amount.first->get_id(), calendar::turn, amount.second );
+                            furn_item->put_in( furn_ammo, pocket_type::MAGAZINE );
+                            add_msg( _( "DEBUG: fake item contains %d charges after insertions" ), furn_item->loaded_ammo().charges );
+                        }
+                    }
+                }
             }
         }
         if( m.accessible_items( p ) ) {
